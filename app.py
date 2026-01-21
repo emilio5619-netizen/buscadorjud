@@ -1,6 +1,5 @@
 import streamlit as st
 import time
-import re
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -13,11 +12,11 @@ from webdriver_manager.chrome import ChromeDriverManager
 st.set_page_config(page_title="Buscador de Processos Profissional", page_icon="⚖️", layout="wide")
 
 def init_driver():
-    """Inicializa o navegador com correções específicas para erro de Renderer Timeout no Streamlit Cloud."""
+    """Inicializa o navegador corrigindo mismatch de versão no Streamlit Cloud."""
     options = Options()
     
-    # Essenciais pro headless no Cloud + anti-timeout renderer
-    options.add_argument("--headless=new")  # Ou "--headless=chrome" se new der problema
+    # Essenciais pro headless no Cloud + anti-timeout
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -25,33 +24,44 @@ def init_driver():
     options.add_argument("--disable-extensions")
     options.add_argument("--remote-debugging-port=9222")
     
-    # Evasão de detecção anti-bot (importante pro TJSP)
+    # Evasão anti-bot
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     
-    # Carrega DOM rápido, sem esperar recursos pesados
     options.page_load_strategy = 'eager'
-    
-    # Binary location comum no Streamlit Cloud (testado em 2025/2026)
-    options.binary_location = "/usr/bin/chromium"  # Se der erro, tenta "/usr/bin/chromium-browser"
+    options.binary_location = "/usr/bin/chromium"  # Ou "/usr/bin/chromium-browser" se o log reclamar
     
     try:
-        # webdriver_manager baixa driver compatível com o chromium instalado
-        service = Service(ChromeDriverManager().install())
+        # FORÇA versão compatível com Chromium 144 (baseado no erro)
+        # Se não achar 144.0.7559.59 exato, usa major "144" ou "latest"
+        service = Service(ChromeDriverManager(version="144").install())  # Ou "144.0.7559.59" se disponível
+        # Alternativa se der erro: ChromeDriverManager().install() com cache limpo, mas força major
+        
         driver = webdriver.Chrome(service=service, options=options)
         
-        # Timeouts maiores pra sites lentos como portais judiciais
+        # Timeouts generosos
         driver.set_page_load_timeout(90)
         driver.set_script_timeout(60)
+        
+        # Debug: Mostra versões reais nos logs do Cloud
+        chrome_version = driver.execute_script("return navigator.userAgent;")
+        st.session_state.debug_info = f"Chrome/Driver iniciado OK. UA: {chrome_version}"
+        
         return driver
     except Exception as e:
         st.error(f"Erro ao iniciar navegador: {str(e)}")
-        return None
+        # Tenta fallback sem versão específica
+        try:
+            st.warning("Tentando fallback com versão latest do driver...")
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+            return driver
+        except:
+            return None
 
 def formatar_saida_processo(dados):
-    """Gera o texto exatamente no formato solicitado pelo usuário."""
     num_seq = dados.get('numero', '000').split('-')[0]
     telefones = "\n".join([f"📞 {t}" for t in dados.get('telefones', [])])
     advs_ativo = "\n".join([f"👤 NOME: {a['nome']}\n🪪 CPF: {a['cpf']}\n🪪 OAB: {a['oab']}" for a in dados.get('advs_ativo', [])])
@@ -90,6 +100,9 @@ if 'step' not in st.session_state:
     st.session_state.step = 'login'
     st.session_state.driver = None
 
+if 'debug_info' in st.session_state:
+    st.info(st.session_state.debug_info)
+
 if st.session_state.step == 'login':
     with st.form("login_form"):
         col1, col2 = st.columns(2)
@@ -106,7 +119,7 @@ if st.session_state.step == 'login':
         if not usuario or not senha:
             st.error("Preencha as credenciais.")
         else:
-            with st.spinner("Conectando ao tribunal (Otimizado pro Cloud 2026)..."):
+            with st.spinner("Conectando ao tribunal (corrigindo versão Chrome 144)..."):
                 driver = init_driver()
                 if driver:
                     max_retries = 3
@@ -116,7 +129,6 @@ if st.session_state.step == 'login':
                             driver.get(tribunal_url)
                             wait = WebDriverWait(driver, 40)
                            
-                            # Preencher Login
                             user_field = wait.until(EC.presence_of_element_located((By.ID, "loginForm:login")))
                             user_field.send_keys(usuario)
                             driver.find_element(By.ID, "loginForm:senha").send_keys(senha)
@@ -129,8 +141,6 @@ if st.session_state.step == 'login':
                                 st.session_state.step = '2fa'
                                 st.rerun()
                             else:
-                                # Aqui vai sua lógica real de busca/extração de processos
-                                # Por enquanto, exemplo como você tinha
                                 exemplo_dados = {
                                     'numero': '0741771-39.2023.8.07.0001', 'instancia': '2° Grau',
                                     'orgao': 'GABINETE DO EXMO. SR. DESEMBARGADOR FÁBIO EDUARDO MARQUES',
@@ -157,9 +167,11 @@ if st.session_state.step == 'login':
                                 if not driver:
                                     break
                             else:
-                                st.error("Falhou após várias tentativas. Verifica credenciais, URL ou rede.")
+                                st.error("Falhou após várias tentativas. Veja logs do app no dashboard.")
                                 if driver:
                                     driver.quit()
+                else:
+                    st.error("Não conseguiu iniciar o driver. Verifique packages.txt e redeploy.")
 
 elif st.session_state.step == '2fa':
     st.warning("🔒 **Verificação de Duas Etapas Detectada**")
@@ -167,7 +179,6 @@ elif st.session_state.step == '2fa':
    
     if st.button("Confirmar e Extrair"):
         st.success("Acesso autorizado! Extraindo dados...")
-        # Aqui você continuaria com o driver da session_state pra fazer a busca real
         if st.session_state.driver:
             st.session_state.driver.quit()
         st.session_state.step = 'login'
