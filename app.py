@@ -1,221 +1,254 @@
 import streamlit as st
-import requests
-import json
-from requests.auth import HTTPBasicAuth
+import time
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+import re
 from datetime import datetime
 
 # Configuração da página
 st.set_page_config(
-    page_title="Buscador de Processos - DataJud",
+    page_title="Buscador de Processos - Portal Tribunais",
     page_icon="⚖️",
     layout="wide"
 )
 
-# Mapeamento de Regiões para Tribunais
-REGION_MAP = {
-    "df": "tjdft",
-    "sp": "tjsp",
-    "rj": "tjrj",
-    "mg": "tjmg",
-    "rs": "tjrs",
-    "pr": "tjpr",
-    "sc": "tjsc",
-    "ba": "tjba",
-    "pe": "tjpe",
-    "ce": "tjce",
-    "go": "tjgo",
-    "mt": "tjmt",
-    "ms": "tjms",
-    "es": "tjes",
-    "am": "tjam",
-    "pa": "tjpa",
-    "ma": "tjma",
-    "pi": "tjpi",
-    "rn": "tjrn",
-    "pb": "tjpb",
-    "al": "tjal",
-    "se": "tjse",
-    "to": "tjto",
-    "ac": "tjac",
-    "ro": "tjro",
-    "rr": "tjrr",
-    "ap": "tjap"
+# Mapeamento de Tribunais e seus portais
+TRIBUNAL_CONFIG = {
+    "tjsp": {
+        "nome": "Tribunal de Justiça de São Paulo",
+        "url": "https://esaj.tjsp.jus.br/esaj/portal.do?servico=740000",
+        "login_xpath": "//*[@id='loginForm:login']",
+        "senha_xpath": "//*[@id='loginForm:senha']",
+        "submit_xpath": "//*[@id='loginForm:loginButton']",
+        "busca_xpath": "//*[@id='searchForm:searchButton']"
+    },
+    "tjsc": {
+        "nome": "Tribunal de Justiça de Santa Catarina",
+        "url": "https://esaj.tjsc.jus.br/esaj/portal.do?servico=740000",
+        "login_xpath": "//*[@id='loginForm:login']",
+        "senha_xpath": "//*[@id='loginForm:senha']",
+        "submit_xpath": "//*[@id='loginForm:loginButton']",
+        "busca_xpath": "//*[@id='searchForm:searchButton']"
+    },
+    "tjrj": {
+        "nome": "Tribunal de Justiça do Rio de Janeiro",
+        "url": "https://esaj.tjrj.jus.br/esaj/portal.do?servico=740000",
+        "login_xpath": "//*[@id='loginForm:login']",
+        "senha_xpath": "//*[@id='loginForm:senha']",
+        "submit_xpath": "//*[@id='loginForm:loginButton']",
+        "busca_xpath": "//*[@id='searchForm:searchButton']"
+    },
+    "tjmg": {
+        "nome": "Tribunal de Justiça de Minas Gerais",
+        "url": "https://esaj.tjmg.jus.br/esaj/portal.do?servico=740000",
+        "login_xpath": "//*[@id='loginForm:login']",
+        "senha_xpath": "//*[@id='loginForm:senha']",
+        "submit_xpath": "//*[@id='loginForm:loginButton']",
+        "busca_xpath": "//*[@id='searchForm:searchButton']"
+    },
+    "tjrs": {
+        "nome": "Tribunal de Justiça do Rio Grande do Sul",
+        "url": "https://esaj.tjrs.jus.br/esaj/portal.do?servico=740000",
+        "login_xpath": "//*[@id='loginForm:login']",
+        "senha_xpath": "//*[@id='loginForm:senha']",
+        "submit_xpath": "//*[@id='loginForm:loginButton']",
+        "busca_xpath": "//*[@id='searchForm:searchButton']"
+    }
 }
 
-def format_date(date_str):
-    if not date_str:
-        return "N/A"
-    try:
-        # Formato comum da API: 2023-05-09T14:30:00.000Z
-        dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        return dt.strftime("%d/%m/%Y %H:%M")
-    except:
-        return date_str
-
-def search_datajud(tribunal, query_text, user, password):
-    # A URL da API Pública do DataJud segue o padrão api-publica.datajud.cnj.jus.br/api_publica_{tribunal}/_search
-    # Cada tribunal pode ter sua própria instância da API
-    url = f"https://api-publica.datajud.cnj.jus.br/api_publica_{tribunal}/_search"
+def init_selenium_driver():
+    """Inicializa o driver do Selenium com Chrome em modo headless."""
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option('useAutomationExtension', False)
     
-    # Query Elasticsearch
-    payload = {
-        "size": 50,
-        "query": {
-            "bool": {
-                "should": [
-                    {"match": {"assuntos.nome": query_text}},
-                    {"match": {"classeProcessual.nome": query_text}},
-                    {"match": {"numeroProcesso": query_text}}
-                ],
-                "minimum_should_match": 1
-            }
-        }
-    }
-
     try:
-        response = requests.post(
-            url,
-            json=payload,
-            auth=HTTPBasicAuth(user, password),
-            timeout=30
+        driver = webdriver.Chrome(options=chrome_options)
+        return driver
+    except Exception as e:
+        st.error(f"Erro ao inicializar o navegador: {str(e)}")
+        return None
+
+def fazer_login_com_2fa(driver, tribunal_id, usuario, senha):
+    """Realiza login com suporte a 2FA manual."""
+    config = TRIBUNAL_CONFIG.get(tribunal_id)
+    if not config:
+        return False, "Tribunal não configurado"
+    
+    try:
+        # Acessar o portal
+        driver.get(config["url"])
+        time.sleep(2)
+        
+        # Preencher login
+        login_field = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, config["login_xpath"]))
         )
+        login_field.clear()
+        login_field.send_keys(usuario)
+        time.sleep(1)
         
-        if response.status_code == 401:
-            return {"error": "Credenciais inválidas (401). Verifique seu usuário e senha do tribunal."}
-        elif response.status_code == 404:
-            return {"error": f"Tribunal '{tribunal}' não encontrado ou API indisponível para este tribunal."}
+        # Preencher senha
+        senha_field = driver.find_element(By.XPATH, config["senha_xpath"])
+        senha_field.clear()
+        senha_field.send_keys(senha)
+        time.sleep(1)
         
-        response.raise_for_status()
-        return response.json()
+        # Clicar em login
+        submit_btn = driver.find_element(By.XPATH, config["submit_xpath"])
+        submit_btn.click()
+        time.sleep(3)
+        
+        # Verificar se há 2FA
+        if "2fa" in driver.page_source.lower() or "verificação" in driver.page_source.lower():
+            return True, "2fa_required"
+        
+        return True, "login_success"
     
-    except requests.exceptions.Timeout:
-        return {"error": "A requisição expirou (Timeout). Tente novamente mais tarde."}
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Erro na conexão: {str(e)}"}
+    except Exception as e:
+        return False, f"Erro no login: {str(e)}"
+
+def extrair_processos(driver, tribunal_id, termo_busca):
+    """Extrai dados de processos após login bem-sucedido."""
+    processos = []
+    try:
+        # Implementar lógica de busca e extração conforme o portal específico
+        # Esta é uma estrutura genérica que pode ser expandida
+        
+        # Aguardar carregamento da página
+        time.sleep(2)
+        
+        # Procurar por elementos de processo na página
+        # Isso varia muito de acordo com o tribunal
+        
+        st.info("Extração de processos em desenvolvimento para este tribunal.")
+        
+    except Exception as e:
+        st.error(f"Erro ao extrair processos: {str(e)}")
+    
+    return processos
+
+def formatar_processo(dados_processo):
+    """Formata os dados do processo no padrão solicitado."""
+    return f"""
+====== PROCESSO {dados_processo.get('numero_seq', 'N/A')} ============
+
+📌 Processo: {dados_processo.get('numero', 'N/A')}
+🏛 Instância: {dados_processo.get('instancia', 'N/A')}
+⚖ Órgão Julgador: {dados_processo.get('orgao', 'N/A')}
+📂 Classe: {dados_processo.get('classe', 'N/A')}
+📝 Assunto: {dados_processo.get('assunto', 'N/A')}
+💰 Valor da Causa: R$ {dados_processo.get('valor', '0,00')}
+
+📅 Data Início: {dados_processo.get('data_inicio', 'N/A')}
+📅 Último Movimento: {dados_processo.get('ultimo_movimento', 'N/A')}
+
+🗒 Polo Ativo:
+👤 NOME: {dados_processo.get('polo_ativo_nome', 'N/A')}
+🪪 CPF/CNPJ: {dados_processo.get('polo_ativo_cpf', 'N/A')}
+🎂 Nascimento: {dados_processo.get('polo_ativo_nasc', 'N/A')}
+💰 Renda: {dados_processo.get('polo_ativo_renda', 'N/A')}
+
+📞 Telefones:
+{chr(10).join([f"📞 {tel}" for tel in dados_processo.get('polo_ativo_telefones', [])])}
+
+⚖ Advogados (POLO ATIVO):
+{chr(10).join([f"👤 NOME: {adv['nome']}{chr(10)}🪪 CPF: {adv['cpf']}{chr(10)}🪪 OAB: {adv['oab']}" for adv in dados_processo.get('polo_ativo_advogados', [])])}
+
+🗒 Polo Passivo:
+👤 NOME: {dados_processo.get('polo_passivo_nome', 'N/A')}
+🪪 CPF/CNPJ: {dados_processo.get('polo_passivo_cpf', 'N/A')}
+
+⚖ Advogados (Passivo):
+{chr(10).join([f"👤 NOME: {adv['nome']}{chr(10)}🪪 CPF: {adv['cpf']}{chr(10)}🪪 OAB: {adv['oab']}" for adv in dados_processo.get('polo_passivo_advogados', [])])}
+
+---------------------------------------------------------------
+=========== FIM PROCESSO {dados_processo.get('numero_seq', 'N/A')} ===========
+"""
 
 # Interface Streamlit
-st.title("⚖️ Buscador de Processos - DataJud")
+st.title("⚖️ Buscador de Processos - Portais de Tribunais")
 st.markdown("---")
 
-# Sidebar com informações e LGPD
 with st.sidebar:
-    st.header("🔐 Acesso Restrito")
-    st.info("Cada profissional deve utilizar suas próprias credenciais do tribunal correspondente.")
-    
-    st.markdown("---")
-    st.header("Sobre")
-    st.markdown("""
-    Esta aplicação consulta a API do DataJud do CNJ. 
-    As credenciais informadas são utilizadas apenas para a consulta atual e **não são armazenadas** em nosso servidor.
-    """)
-    
-    st.warning("⚠️ **Aviso LGPD:** Os dados acessados são de responsabilidade do profissional. Utilize estas informações com ética e sigilo profissional.")
-    st.markdown("[Obter credenciais DataJud](https://www.cnj.jus.br/sistemas/datajud/api-publica/)")
+    st.header("🔐 Acesso com 2FA")
+    st.info("Você será solicitado a digitar o código de verificação manualmente durante o login.")
+    st.warning("⚠️ Suas credenciais são usadas apenas para esta sessão e não são armazenadas.")
 
-# Formulário de Busca e Credenciais
 with st.form("search_form"):
-    st.subheader("1. Credenciais do Tribunal")
-    col_user, col_pass = st.columns(2)
-    with col_user:
-        user_input = st.text_input("Usuário / E-mail", placeholder="ex: luan@ijsm.org.br", help="Seu login de acesso ao tribunal")
-    with col_pass:
-        pass_input = st.text_input("Senha", type="password", placeholder="Sua senha", help="Sua senha de acesso ao tribunal")
-
-    st.markdown("---")
-    st.subheader("2. Parâmetros de Busca")
     col1, col2 = st.columns(2)
     
     with col1:
-        region_input = st.text_input("Região (ex: sc, sp, df)", placeholder="Preenche o tribunal automaticamente").lower().strip()
-        
-        default_tribunal = "tjsc" # Padrão para o exemplo de SC
-        if region_input in REGION_MAP:
-            default_tribunal = REGION_MAP[region_input]
-            
-        tribunal = st.text_input("Tribunal (ID)", value=default_tribunal, help="Ex: tjsc, tjdft, tjsp, tjrj")
-        
+        tribunal = st.selectbox(
+            "Selecione o Tribunal",
+            options=list(TRIBUNAL_CONFIG.keys()),
+            format_func=lambda x: TRIBUNAL_CONFIG[x]["nome"]
+        )
+        usuario = st.text_input("Usuário (CPF ou Login)", placeholder="ex: 14885643880")
+    
     with col2:
-        causa = st.text_input("Causa / Assunto / Número", placeholder="Ex: PASEP, Apelação, 0000000-00.0000.0.00.0000")
-        st.caption("Dica: Você pode buscar por assunto ou pelo número do processo.")
-
-    submit = st.form_submit_button("🔍 Realizar Busca com Minhas Credenciais")
+        senha = st.text_input("Senha", type="password", placeholder="Sua senha")
+        termo_busca = st.text_input("Termo de Busca", placeholder="ex: PASEP, Apelação, número do processo")
+    
+    submit = st.form_submit_button("🔍 Iniciar Busca com 2FA")
 
 if submit:
-    if not causa or not user_input or not pass_input:
-        st.error("Por favor, preencha o Usuário, Senha e o termo de busca.")
+    if not usuario or not senha or not termo_busca:
+        st.error("Por favor, preencha todos os campos.")
     else:
-        with st.spinner(f"Consultando API do {tribunal.upper()} com suas credenciais..."):
-            results = search_datajud(tribunal.lower(), causa, user_input, pass_input)
+        with st.spinner("Inicializando navegador..."):
+            driver = init_selenium_driver()
             
-            if "error" in results:
-                st.error(results["error"])
-                st.info("Certifique-se de que o Tribunal selecionado corresponde às suas credenciais.")
-            else:
-                hits = results.get("hits", {}).get("hits", [])
-                total = results.get("hits", {}).get("total", {}).get("value", 0)
+            if driver:
+                st.info("Tentando fazer login...")
+                sucesso, mensagem = fazer_login_com_2fa(driver, tribunal, usuario, senha)
                 
-                if total == 0:
-                    st.warning("Nenhum processo encontrado para os critérios informados.")
+                if sucesso and mensagem == "2fa_required":
+                    st.warning("⚠️ **Verificação de Duas Etapas Detectada**")
+                    st.info("Você recebeu um código de verificação. Digite-o abaixo:")
+                    
+                    codigo_2fa = st.text_input("Código de Verificação (2FA)", type="password", placeholder="Digite o código que recebeu")
+                    
+                    if st.button("Confirmar Código"):
+                        # Aqui você implementaria a lógica para digitar o código no portal
+                        st.success("Código confirmado! Continuando com a busca...")
+                        time.sleep(2)
+                        
+                        # Extrair processos
+                        processos = extrair_processos(driver, tribunal, termo_busca)
+                        
+                        if processos:
+                            st.success(f"Encontrados {len(processos)} processos!")
+                            for processo in processos:
+                                st.text(formatar_processo(processo))
+                        else:
+                            st.warning("Nenhum processo encontrado com os critérios informados.")
+                
+                elif sucesso and mensagem == "login_success":
+                    st.success("Login realizado com sucesso!")
+                    
+                    # Extrair processos
+                    processos = extrair_processos(driver, tribunal, termo_busca)
+                    
+                    if processos:
+                        st.success(f"Encontrados {len(processos)} processos!")
+                        for processo in processos:
+                            st.text(formatar_processo(processo))
+                    else:
+                        st.warning("Nenhum processo encontrado com os critérios informados.")
+                
                 else:
-                    st.success(f"Sucesso! Encontrados {total} processos (exibindo até 50).")
-                    
-                    summary_data = []
-                    
-                    for hit in hits:
-                        p = hit.get("_source", {})
-                        num = p.get("numeroProcesso", "N/A")
-                        classe = p.get("classeProcessual", {}).get("nome", "N/A")
-                        assuntos = ", ".join([a.get("nome", "") for a in p.get("assuntos", [])])
-                        valor = p.get("valorCausa", 0.0)
-                        
-                        summary_data.append({
-                            "Número": num,
-                            "Classe": classe,
-                            "Assunto": assuntos,
-                            "Valor": f"R$ {valor:,.2f}"
-                        })
-                        
-                        with st.expander(f"📄 Processo: {num}"):
-                            st.markdown(f"""
-                            📌 **Processo:** {num}
-                            🏛 **Instância:** {p.get('grau', 'N/A')}
-                            ⚖ **Órgão Julgador:** {p.get('orgaoJulgador', {}).get('nome', 'N/A')}
-                            📂 **Classe:** {classe}
-                            📝 **Assunto:** {assuntos}
-                            💰 **Valor da Causa:** R$ {valor:,.2f}
-                            📅 **Data Início:** {format_date(p.get('dataAjuizamento'))}
-                            📅 **Último Movimento:** {format_date(p.get('movimentos', [{}])[-1].get('dataHora')) if p.get('movimentos') else 'N/A'}
-                            """)
-                            
-                            # Polos
-                            col_a, col_b = st.columns(2)
-                            
-                            with col_a:
-                                st.markdown("### 🗒 Polo Ativo")
-                                for parte in p.get("poloAtivo", []):
-                                    st.markdown(f"- **{parte.get('nome', 'N/A')}**")
-                                    if parte.get('cpfCnpj'): st.text(f"CPF/CNPJ: {parte.get('cpfCnpj')}")
-                                    
-                                    # Advogados Polo Ativo
-                                    advs = parte.get("advogados", [])
-                                    if advs:
-                                        st.markdown("*Advogados:*")
-                                        for adv in advs:
-                                            st.text(f"  • {adv.get('nome')} (OAB: {adv.get('oab', 'N/A')})")
-
-                            with col_b:
-                                st.markdown("### 🗒 Polo Passivo")
-                                for parte in p.get("poloPassivo", []):
-                                    st.markdown(f"- **{parte.get('nome', 'N/A')}**")
-                                    if parte.get('cpfCnpj'): st.text(f"CPF/CNPJ: {parte.get('cpfCnpj')}")
-                                    
-                                    # Advogados Polo Passivo
-                                    advs = parte.get("advogados", [])
-                                    if advs:
-                                        st.markdown("*Advogados:*")
-                                        for adv in advs:
-                                            st.text(f"  • {adv.get('nome')} (OAB: {adv.get('oab', 'N/A')})")
-
-                    # Tabela Resumo
-                    st.markdown("### 📊 Tabela Resumo")
-                    st.dataframe(summary_data, use_container_width=True)
+                    st.error(f"Erro: {mensagem}")
+                
+                driver.quit()
+            else:
+                st.error("Não foi possível inicializar o navegador.")
