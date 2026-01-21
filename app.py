@@ -52,14 +52,11 @@ def format_date(date_str):
     except:
         return date_str
 
-def search_datajud(tribunal, query_text, credentials):
+def search_datajud(tribunal, query_text, user, password):
+    # A URL da API Pública do DataJud segue o padrão api-publica.datajud.cnj.jus.br/api_publica_{tribunal}/_search
+    # Cada tribunal pode ter sua própria instância da API
     url = f"https://api-publica.datajud.cnj.jus.br/api_publica_{tribunal}/_search"
     
-    try:
-        user, password = credentials.split(':')
-    except ValueError:
-        return {"error": "Formato de credenciais inválido. Use 'usuario:senha'."}
-
     # Query Elasticsearch
     payload = {
         "size": 50,
@@ -67,7 +64,8 @@ def search_datajud(tribunal, query_text, credentials):
             "bool": {
                 "should": [
                     {"match": {"assuntos.nome": query_text}},
-                    {"match": {"classeProcessual.nome": query_text}}
+                    {"match": {"classeProcessual.nome": query_text}},
+                    {"match": {"numeroProcesso": query_text}}
                 ],
                 "minimum_should_match": 1
             }
@@ -83,9 +81,9 @@ def search_datajud(tribunal, query_text, credentials):
         )
         
         if response.status_code == 401:
-            return {"error": "Credenciais inválidas (401). Verifique seu usuário e senha."}
+            return {"error": "Credenciais inválidas (401). Verifique seu usuário e senha do tribunal."}
         elif response.status_code == 404:
-            return {"error": f"Tribunal '{tribunal}' não encontrado ou API indisponível."}
+            return {"error": f"Tribunal '{tribunal}' não encontrado ou API indisponível para este tribunal."}
         
         response.raise_for_status()
         return response.json()
@@ -101,39 +99,57 @@ st.markdown("---")
 
 # Sidebar com informações e LGPD
 with st.sidebar:
+    st.header("🔐 Acesso Restrito")
+    st.info("Cada profissional deve utilizar suas próprias credenciais do tribunal correspondente.")
+    
+    st.markdown("---")
     st.header("Sobre")
-    st.info("Esta aplicação consulta a API Pública do DataJud do CNJ. As credenciais são usadas apenas como proxy e não são armazenadas.")
-    st.warning("⚠️ **Aviso LGPD:** Os dados acessados são públicos. Utilize estas informações com responsabilidade e ética profissional.")
+    st.markdown("""
+    Esta aplicação consulta a API do DataJud do CNJ. 
+    As credenciais informadas são utilizadas apenas para a consulta atual e **não são armazenadas** em nosso servidor.
+    """)
+    
+    st.warning("⚠️ **Aviso LGPD:** Os dados acessados são de responsabilidade do profissional. Utilize estas informações com ética e sigilo profissional.")
     st.markdown("[Obter credenciais DataJud](https://www.cnj.jus.br/sistemas/datajud/api-publica/)")
 
-# Formulário de Busca
+# Formulário de Busca e Credenciais
 with st.form("search_form"):
+    st.subheader("1. Credenciais do Tribunal")
+    col_user, col_pass = st.columns(2)
+    with col_user:
+        user_input = st.text_input("Usuário / E-mail", placeholder="ex: luan@ijsm.org.br", help="Seu login de acesso ao tribunal")
+    with col_pass:
+        pass_input = st.text_input("Senha", type="password", placeholder="Sua senha", help="Sua senha de acesso ao tribunal")
+
+    st.markdown("---")
+    st.subheader("2. Parâmetros de Busca")
     col1, col2 = st.columns(2)
     
     with col1:
-        region_input = st.text_input("Região (ex: df, sp, rj)", placeholder="Opcional - preenche o tribunal automaticamente").lower().strip()
+        region_input = st.text_input("Região (ex: sc, sp, df)", placeholder="Preenche o tribunal automaticamente").lower().strip()
         
-        default_tribunal = "tjdft"
+        default_tribunal = "tjsc" # Padrão para o exemplo de SC
         if region_input in REGION_MAP:
             default_tribunal = REGION_MAP[region_input]
             
-        tribunal = st.text_input("Tribunal", value=default_tribunal, help="Ex: tjdft, tjsp, tjrj")
+        tribunal = st.text_input("Tribunal (ID)", value=default_tribunal, help="Ex: tjsc, tjdft, tjsp, tjrj")
         
     with col2:
-        causa = st.text_input("Causa / Assunto", placeholder="Ex: PASEP, Apelação Cível", help="Busca em assuntos e classe processual")
-        creds = st.text_input("Credenciais DataJud (user:senha)", type="password", help="Formato: seu_usuario:sua_senha")
+        causa = st.text_input("Causa / Assunto / Número", placeholder="Ex: PASEP, Apelação, 0000000-00.0000.0.00.0000")
+        st.caption("Dica: Você pode buscar por assunto ou pelo número do processo.")
 
-    submit = st.form_submit_button("🔍 Buscar Processos!")
+    submit = st.form_submit_button("🔍 Realizar Busca com Minhas Credenciais")
 
 if submit:
-    if not causa or not creds:
-        st.error("Por favor, preencha a Causa/Assunto e as Credenciais.")
+    if not causa or not user_input or not pass_input:
+        st.error("Por favor, preencha o Usuário, Senha e o termo de busca.")
     else:
-        with st.spinner(f"Consultando API do {tribunal.upper()}..."):
-            results = search_datajud(tribunal.lower(), causa, creds)
+        with st.spinner(f"Consultando API do {tribunal.upper()} com suas credenciais..."):
+            results = search_datajud(tribunal.lower(), causa, user_input, pass_input)
             
             if "error" in results:
                 st.error(results["error"])
+                st.info("Certifique-se de que o Tribunal selecionado corresponde às suas credenciais.")
             else:
                 hits = results.get("hits", {}).get("hits", [])
                 total = results.get("hits", {}).get("total", {}).get("value", 0)
@@ -141,7 +157,7 @@ if submit:
                 if total == 0:
                     st.warning("Nenhum processo encontrado para os critérios informados.")
                 else:
-                    st.success(f"Encontrados {total} processos (exibindo até 50).")
+                    st.success(f"Sucesso! Encontrados {total} processos (exibindo até 50).")
                     
                     summary_data = []
                     
