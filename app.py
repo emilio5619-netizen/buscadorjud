@@ -31,37 +31,38 @@ def init_driver():
     options.add_experimental_option("useAutomationExtension", False)
     
     options.page_load_strategy = 'eager'
-    options.binary_location = "/usr/bin/chromium"  # Ou "/usr/bin/chromium-browser" se o log reclamar
+    options.binary_location = "/usr/bin/chromium"  # Se der erro, testa "/usr/bin/chromium-browser"
     
     try:
-        # FORÇA versão compatível com Chromium 144 (baseado no erro)
-        # Se não achar 144.0.7559.59 exato, usa major "144" ou "latest"
-        service = Service(ChromeDriverManager(version="144").install())  # Ou "144.0.7559.59" se disponível
-        # Alternativa se der erro: ChromeDriverManager().install() com cache limpo, mas força major
-        
+        # FORÇA versão compatível com Chromium 144 (usando driver_version na v4.0.2+)
+        service = Service(ChromeDriverManager(driver_version="144").install())
         driver = webdriver.Chrome(service=service, options=options)
         
         # Timeouts generosos
         driver.set_page_load_timeout(90)
         driver.set_script_timeout(60)
         
-        # Debug: Mostra versões reais nos logs do Cloud
-        chrome_version = driver.execute_script("return navigator.userAgent;")
-        st.session_state.debug_info = f"Chrome/Driver iniciado OK. UA: {chrome_version}"
+        # Debug: Mostra versão real do browser nos logs/tela
+        ua = driver.execute_script("return navigator.userAgent;")
+        st.session_state.debug_info = f"Driver iniciado OK! User-Agent: {ua}"
         
         return driver
     except Exception as e:
-        st.error(f"Erro ao iniciar navegador: {str(e)}")
-        # Tenta fallback sem versão específica
+        st.error(f"Erro ao iniciar com driver_version=144: {str(e)}")
+        # Fallback: tenta detectar automático (sem forçar versão)
         try:
-            st.warning("Tentando fallback com versão latest do driver...")
+            st.warning("Tentando fallback com detecção automática do driver...")
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
+            ua = driver.execute_script("return navigator.userAgent;")
+            st.session_state.debug_info = f"Fallback OK! User-Agent: {ua}"
             return driver
-        except:
+        except Exception as fallback_e:
+            st.error(f"Fallback também falhou: {str(fallback_e)}")
             return None
 
 def formatar_saida_processo(dados):
+    """Gera o texto exatamente no formato solicitado."""
     num_seq = dados.get('numero', '000').split('-')[0]
     telefones = "\n".join([f"📞 {t}" for t in dados.get('telefones', [])])
     advs_ativo = "\n".join([f"👤 NOME: {a['nome']}\n🪪 CPF: {a['cpf']}\n🪪 OAB: {a['oab']}" for a in dados.get('advs_ativo', [])])
@@ -100,6 +101,7 @@ if 'step' not in st.session_state:
     st.session_state.step = 'login'
     st.session_state.driver = None
 
+# Mostra debug se existir
 if 'debug_info' in st.session_state:
     st.info(st.session_state.debug_info)
 
@@ -119,11 +121,10 @@ if st.session_state.step == 'login':
         if not usuario or not senha:
             st.error("Preencha as credenciais.")
         else:
-            with st.spinner("Conectando ao tribunal (corrigindo versão Chrome 144)..."):
+            with st.spinner("Conectando ao tribunal (corrigido pra webdriver-manager 4.0.2)..."):
                 driver = init_driver()
                 if driver:
                     max_retries = 3
-                    success = False
                     for tentativa in range(1, max_retries + 1):
                         try:
                             driver.get(tribunal_url)
@@ -141,6 +142,7 @@ if st.session_state.step == 'login':
                                 st.session_state.step = '2fa'
                                 st.rerun()
                             else:
+                                # Exemplo de saída (substitua pela extração real depois)
                                 exemplo_dados = {
                                     'numero': '0741771-39.2023.8.07.0001', 'instancia': '2° Grau',
                                     'orgao': 'GABINETE DO EXMO. SR. DESEMBARGADOR FÁBIO EDUARDO MARQUES',
@@ -154,7 +156,6 @@ if st.session_state.step == 'login':
                                     'advs_passivo': [{'nome': 'JORGE DONIZETI SANCHEZ', 'cpf': '1649439865', 'oab': 'RJ186878'}]
                                 }
                                 st.text(formatar_saida_processo(exemplo_dados))
-                                success = True
                                 driver.quit()
                                 break
                         except Exception as e:
@@ -167,7 +168,7 @@ if st.session_state.step == 'login':
                                 if not driver:
                                     break
                             else:
-                                st.error("Falhou após várias tentativas. Veja logs do app no dashboard.")
+                                st.error("Falhou após várias tentativas. Veja os logs no dashboard do Streamlit.")
                                 if driver:
                                     driver.quit()
                 else:
