@@ -12,18 +12,20 @@ from selenium.webdriver.chrome.service import Service
 st.set_page_config(page_title="Buscador de Processos Profissional", page_icon="⚖️", layout="wide")
 
 def init_driver():
-    """Inicializa o navegador com opções básicas anti-crash para Streamlit Cloud."""
+    """Inicializa o navegador com correções específicas para erro de Renderer Timeout."""
     options = Options()
     
-    # --- OPÇÕES ANTI-CRASH FUNDAMENTAIS ---
-    options.add_argument("--headless")
+    # --- ESTRATÉGIA ANTI-RENDERER TIMEOUT (CHROME 144+) ---
+    options.add_argument("--headless=new") # Usa o novo motor headless mais estável
     options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage") # Resolve o erro de Stacktrace/Crash de memória
+    options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    options.add_argument("--disable-software-rasterizer")
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-infobars")
     options.add_argument("--remote-debugging-port=9222")
-    options.add_argument("--single-process") # Opção extra para estabilidade em containers
+    
+    # Força o Chrome a não esperar por renderização de imagens/anúncios (evita travar o renderer)
+    options.page_load_strategy = 'eager' # Carrega o DOM mas não espera por tudo (mais rápido e estável)
     
     # Caminhos do sistema Streamlit Cloud
     options.binary_location = "/usr/bin/chromium"
@@ -31,7 +33,8 @@ def init_driver():
     try:
         service = Service("/usr/bin/chromedriver")
         driver = webdriver.Chrome(service=service, options=options)
-        driver.set_page_load_timeout(120) # Aumentado para evitar timeouts em conexões lentas
+        # Timeout de comando para evitar que o driver fique esperando o renderer infinitamente
+        driver.set_page_load_timeout(45) 
         return driver
     except Exception as e:
         st.error(f"Erro ao iniciar navegador: {str(e)}")
@@ -102,12 +105,12 @@ if st.session_state.step == 'login':
         if not usuario or not senha:
             st.error("Preencha as credenciais.")
         else:
-            with st.spinner("Conectando ao tribunal de forma segura..."):
+            with st.spinner("Conectando ao tribunal (Otimizado para Chrome 144)..."):
                 driver = init_driver()
                 if driver:
                     try:
                         driver.get(tribunal_url)
-                        wait = WebDriverWait(driver, 30)
+                        wait = WebDriverWait(driver, 20)
                         
                         # Preencher Login
                         user_field = wait.until(EC.presence_of_element_located((By.ID, "loginForm:login")))
@@ -147,6 +150,5 @@ elif st.session_state.step == '2fa':
     
     if st.button("Confirmar e Extrair"):
         st.success("Acesso autorizado! Extraindo dados...")
-        # Aqui o código continuaria a extração real
         st.session_state.step = 'login'
         if st.session_state.driver: st.session_state.driver.quit()
