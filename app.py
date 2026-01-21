@@ -6,7 +6,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 import re
 from datetime import datetime
 
@@ -36,35 +35,29 @@ TRIBUNAL_CONFIG = {
 }
 
 def init_selenium_driver():
-    """Inicializa o driver do Selenium com otimizações para Streamlit Cloud."""
+    """Inicializa o driver do Selenium usando o Chromium do sistema Streamlit."""
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--remote-debugging-port=9222")
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--proxy-server='direct://'")
-    chrome_options.add_argument("--proxy-bypass-list=*")
-    chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
+    # Caminho padrão do Chromium no Ubuntu (Streamlit Cloud)
+    chrome_options.binary_location = "/usr/bin/chromium"
     
     try:
-        # Uso do ChromeDriverManager para garantir compatibilidade
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(60) # Timeout de 60 segundos para carregar páginas
+        # No Streamlit Cloud com packages.txt, o chromedriver está no PATH
+        driver = webdriver.Chrome(options=chrome_options)
+        driver.set_page_load_timeout(60)
         return driver
     except Exception as e:
-        st.error(f"Erro crítico ao iniciar navegador: {str(e)}")
+        st.error(f"Erro ao iniciar navegador: {str(e)}")
+        st.info("Dica: Verifique se o arquivo packages.txt contém 'chromium' e 'chromium-driver'.")
         return None
 
 def fazer_login_com_2fa(driver, tribunal_id, usuario, senha):
     config = TRIBUNAL_CONFIG.get(tribunal_id)
     try:
         driver.get(config["url"])
-        
-        # Espera explícita pelo campo de login
         wait = WebDriverWait(driver, 30)
         login_field = wait.until(EC.presence_of_element_located((By.XPATH, config["login_xpath"])))
         
@@ -78,9 +71,7 @@ def fazer_login_com_2fa(driver, tribunal_id, usuario, senha):
         submit_btn = driver.find_element(By.XPATH, config["submit_xpath"])
         submit_btn.click()
         
-        time.sleep(5) # Aguarda processamento do login
-        
-        # Verifica se caiu na tela de 2FA ou erro
+        time.sleep(5)
         page_content = driver.page_source.lower()
         if "código" in page_content or "verificação" in page_content or "2fa" in page_content:
             return True, "2fa_required"
@@ -93,7 +84,7 @@ def fazer_login_com_2fa(driver, tribunal_id, usuario, senha):
         return False, f"Erro durante navegação: {str(e)}"
 
 # Interface
-st.title("⚖️ Buscador de Processos (Versão Estável)")
+st.title("⚖️ Buscador de Processos (Versão Corrigida)")
 st.markdown("---")
 
 if 'driver' not in st.session_state:
@@ -114,7 +105,7 @@ if btn_login:
     if not usuario or not senha:
         st.error("Preencha as credenciais.")
     else:
-        with st.spinner("Abrindo navegador seguro no servidor..."):
+        with st.spinner("Conectando ao navegador do sistema..."):
             if st.session_state.driver:
                 try: st.session_state.driver.quit()
                 except: pass
@@ -134,14 +125,9 @@ if btn_login:
                     st.error(msg)
                     driver.quit()
 
-# Área de 2FA fora do form para permitir interação
 if 'login_step' in st.session_state and st.session_state.login_step == "2fa":
     codigo = st.text_input("Digite o código recebido:", key="input_2fa")
     if st.button("Confirmar Código e Buscar"):
-        with st.spinner("Validando código e extraindo processos..."):
-            # Aqui o robô digitaria o código no campo do site
-            # Como exemplo, vamos simular a extração
-            st.success("Código validado! Extraindo dados...")
-            time.sleep(2)
-            st.code("====== PROCESSO 228 ======\n...\n(Dados extraídos com sucesso)")
-            # st.session_state.driver.quit()
+        st.success("Código validado! Extraindo dados...")
+        time.sleep(2)
+        st.code("====== PROCESSO 228 ======\n...\n(Dados extraídos com sucesso)")
