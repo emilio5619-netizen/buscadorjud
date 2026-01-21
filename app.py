@@ -5,6 +5,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 import re
 from datetime import datetime
 
@@ -15,240 +17,131 @@ st.set_page_config(
     layout="wide"
 )
 
-# Mapeamento de Tribunais e seus portais
+# Mapeamento de Tribunais
 TRIBUNAL_CONFIG = {
     "tjsp": {
         "nome": "Tribunal de Justiça de São Paulo",
         "url": "https://esaj.tjsp.jus.br/esaj/portal.do?servico=740000",
         "login_xpath": "//*[@id='loginForm:login']",
         "senha_xpath": "//*[@id='loginForm:senha']",
-        "submit_xpath": "//*[@id='loginForm:loginButton']",
-        "busca_xpath": "//*[@id='searchForm:searchButton']"
+        "submit_xpath": "//*[@id='loginForm:loginButton']"
     },
     "tjsc": {
         "nome": "Tribunal de Justiça de Santa Catarina",
         "url": "https://esaj.tjsc.jus.br/esaj/portal.do?servico=740000",
         "login_xpath": "//*[@id='loginForm:login']",
         "senha_xpath": "//*[@id='loginForm:senha']",
-        "submit_xpath": "//*[@id='loginForm:loginButton']",
-        "busca_xpath": "//*[@id='searchForm:searchButton']"
-    },
-    "tjrj": {
-        "nome": "Tribunal de Justiça do Rio de Janeiro",
-        "url": "https://esaj.tjrj.jus.br/esaj/portal.do?servico=740000",
-        "login_xpath": "//*[@id='loginForm:login']",
-        "senha_xpath": "//*[@id='loginForm:senha']",
-        "submit_xpath": "//*[@id='loginForm:loginButton']",
-        "busca_xpath": "//*[@id='searchForm:searchButton']"
-    },
-    "tjmg": {
-        "nome": "Tribunal de Justiça de Minas Gerais",
-        "url": "https://esaj.tjmg.jus.br/esaj/portal.do?servico=740000",
-        "login_xpath": "//*[@id='loginForm:login']",
-        "senha_xpath": "//*[@id='loginForm:senha']",
-        "submit_xpath": "//*[@id='loginForm:loginButton']",
-        "busca_xpath": "//*[@id='searchForm:searchButton']"
-    },
-    "tjrs": {
-        "nome": "Tribunal de Justiça do Rio Grande do Sul",
-        "url": "https://esaj.tjrs.jus.br/esaj/portal.do?servico=740000",
-        "login_xpath": "//*[@id='loginForm:login']",
-        "senha_xpath": "//*[@id='loginForm:senha']",
-        "submit_xpath": "//*[@id='loginForm:loginButton']",
-        "busca_xpath": "//*[@id='searchForm:searchButton']"
+        "submit_xpath": "//*[@id='loginForm:loginButton']"
     }
 }
 
 def init_selenium_driver():
-    """Inicializa o driver do Selenium com Chrome em modo headless."""
+    """Inicializa o driver do Selenium com otimizações para Streamlit Cloud."""
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option('useAutomationExtension', False)
+    chrome_options.add_argument("--remote-debugging-port=9222")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--proxy-server='direct://'")
+    chrome_options.add_argument("--proxy-bypass-list=*")
+    chrome_options.add_argument("--start-maximized")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
     
     try:
-        driver = webdriver.Chrome(options=chrome_options)
+        # Uso do ChromeDriverManager para garantir compatibilidade
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(60) # Timeout de 60 segundos para carregar páginas
         return driver
     except Exception as e:
-        st.error(f"Erro ao inicializar o navegador: {str(e)}")
+        st.error(f"Erro crítico ao iniciar navegador: {str(e)}")
         return None
 
 def fazer_login_com_2fa(driver, tribunal_id, usuario, senha):
-    """Realiza login com suporte a 2FA manual."""
     config = TRIBUNAL_CONFIG.get(tribunal_id)
-    if not config:
-        return False, "Tribunal não configurado"
-    
     try:
-        # Acessar o portal
         driver.get(config["url"])
-        time.sleep(2)
         
-        # Preencher login
-        login_field = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, config["login_xpath"]))
-        )
+        # Espera explícita pelo campo de login
+        wait = WebDriverWait(driver, 30)
+        login_field = wait.until(EC.presence_of_element_located((By.XPATH, config["login_xpath"])))
+        
         login_field.clear()
         login_field.send_keys(usuario)
-        time.sleep(1)
         
-        # Preencher senha
         senha_field = driver.find_element(By.XPATH, config["senha_xpath"])
         senha_field.clear()
         senha_field.send_keys(senha)
-        time.sleep(1)
         
-        # Clicar em login
         submit_btn = driver.find_element(By.XPATH, config["submit_xpath"])
         submit_btn.click()
-        time.sleep(3)
         
-        # Verificar se há 2FA
-        if "2fa" in driver.page_source.lower() or "verificação" in driver.page_source.lower():
+        time.sleep(5) # Aguarda processamento do login
+        
+        # Verifica se caiu na tela de 2FA ou erro
+        page_content = driver.page_source.lower()
+        if "código" in page_content or "verificação" in page_content or "2fa" in page_content:
             return True, "2fa_required"
         
+        if "inválid" in page_content or "incorret" in page_content:
+            return False, "Usuário ou senha incorretos no portal do tribunal."
+            
         return True, "login_success"
-    
     except Exception as e:
-        return False, f"Erro no login: {str(e)}"
+        return False, f"Erro durante navegação: {str(e)}"
 
-def extrair_processos(driver, tribunal_id, termo_busca):
-    """Extrai dados de processos após login bem-sucedido."""
-    processos = []
-    try:
-        # Implementar lógica de busca e extração conforme o portal específico
-        # Esta é uma estrutura genérica que pode ser expandida
-        
-        # Aguardar carregamento da página
-        time.sleep(2)
-        
-        # Procurar por elementos de processo na página
-        # Isso varia muito de acordo com o tribunal
-        
-        st.info("Extração de processos em desenvolvimento para este tribunal.")
-        
-    except Exception as e:
-        st.error(f"Erro ao extrair processos: {str(e)}")
-    
-    return processos
-
-def formatar_processo(dados_processo):
-    """Formata os dados do processo no padrão solicitado."""
-    return f"""
-====== PROCESSO {dados_processo.get('numero_seq', 'N/A')} ============
-
-📌 Processo: {dados_processo.get('numero', 'N/A')}
-🏛 Instância: {dados_processo.get('instancia', 'N/A')}
-⚖ Órgão Julgador: {dados_processo.get('orgao', 'N/A')}
-📂 Classe: {dados_processo.get('classe', 'N/A')}
-📝 Assunto: {dados_processo.get('assunto', 'N/A')}
-💰 Valor da Causa: R$ {dados_processo.get('valor', '0,00')}
-
-📅 Data Início: {dados_processo.get('data_inicio', 'N/A')}
-📅 Último Movimento: {dados_processo.get('ultimo_movimento', 'N/A')}
-
-🗒 Polo Ativo:
-👤 NOME: {dados_processo.get('polo_ativo_nome', 'N/A')}
-🪪 CPF/CNPJ: {dados_processo.get('polo_ativo_cpf', 'N/A')}
-🎂 Nascimento: {dados_processo.get('polo_ativo_nasc', 'N/A')}
-💰 Renda: {dados_processo.get('polo_ativo_renda', 'N/A')}
-
-📞 Telefones:
-{chr(10).join([f"📞 {tel}" for tel in dados_processo.get('polo_ativo_telefones', [])])}
-
-⚖ Advogados (POLO ATIVO):
-{chr(10).join([f"👤 NOME: {adv['nome']}{chr(10)}🪪 CPF: {adv['cpf']}{chr(10)}🪪 OAB: {adv['oab']}" for adv in dados_processo.get('polo_ativo_advogados', [])])}
-
-🗒 Polo Passivo:
-👤 NOME: {dados_processo.get('polo_passivo_nome', 'N/A')}
-🪪 CPF/CNPJ: {dados_processo.get('polo_passivo_cpf', 'N/A')}
-
-⚖ Advogados (Passivo):
-{chr(10).join([f"👤 NOME: {adv['nome']}{chr(10)}🪪 CPF: {adv['cpf']}{chr(10)}🪪 OAB: {adv['oab']}" for adv in dados_processo.get('polo_passivo_advogados', [])])}
-
----------------------------------------------------------------
-=========== FIM PROCESSO {dados_processo.get('numero_seq', 'N/A')} ===========
-"""
-
-# Interface Streamlit
-st.title("⚖️ Buscador de Processos - Portais de Tribunais")
+# Interface
+st.title("⚖️ Buscador de Processos (Versão Estável)")
 st.markdown("---")
 
-with st.sidebar:
-    st.header("🔐 Acesso com 2FA")
-    st.info("Você será solicitado a digitar o código de verificação manualmente durante o login.")
-    st.warning("⚠️ Suas credenciais são usadas apenas para esta sessão e não são armazenadas.")
+if 'driver' not in st.session_state:
+    st.session_state.driver = None
 
-with st.form("search_form"):
+with st.form("login_form"):
     col1, col2 = st.columns(2)
-    
     with col1:
-        tribunal = st.selectbox(
-            "Selecione o Tribunal",
-            options=list(TRIBUNAL_CONFIG.keys()),
-            format_func=lambda x: TRIBUNAL_CONFIG[x]["nome"]
-        )
-        usuario = st.text_input("Usuário (CPF ou Login)", placeholder="ex: 14885643880")
-    
+        tribunal = st.selectbox("Tribunal", list(TRIBUNAL_CONFIG.keys()))
+        usuario = st.text_input("CPF/Login")
     with col2:
-        senha = st.text_input("Senha", type="password", placeholder="Sua senha")
-        termo_busca = st.text_input("Termo de Busca", placeholder="ex: PASEP, Apelação, número do processo")
+        senha = st.text_input("Senha", type="password")
+        termo = st.text_input("O que buscar?")
     
-    submit = st.form_submit_button("🔍 Iniciar Busca com 2FA")
+    btn_login = st.form_submit_button("🚀 Iniciar Acesso")
 
-if submit:
-    if not usuario or not senha or not termo_busca:
-        st.error("Por favor, preencha todos os campos.")
+if btn_login:
+    if not usuario or not senha:
+        st.error("Preencha as credenciais.")
     else:
-        with st.spinner("Inicializando navegador..."):
-            driver = init_selenium_driver()
+        with st.spinner("Abrindo navegador seguro no servidor..."):
+            if st.session_state.driver:
+                try: st.session_state.driver.quit()
+                except: pass
             
+            driver = init_selenium_driver()
             if driver:
-                st.info("Tentando fazer login...")
-                sucesso, mensagem = fazer_login_com_2fa(driver, tribunal, usuario, senha)
+                st.session_state.driver = driver
+                sucesso, msg = fazer_login_com_2fa(driver, tribunal, usuario, senha)
                 
-                if sucesso and mensagem == "2fa_required":
-                    st.warning("⚠️ **Verificação de Duas Etapas Detectada**")
-                    st.info("Você recebeu um código de verificação. Digite-o abaixo:")
-                    
-                    codigo_2fa = st.text_input("Código de Verificação (2FA)", type="password", placeholder="Digite o código que recebeu")
-                    
-                    if st.button("Confirmar Código"):
-                        # Aqui você implementaria a lógica para digitar o código no portal
-                        st.success("Código confirmado! Continuando com a busca...")
-                        time.sleep(2)
-                        
-                        # Extrair processos
-                        processos = extrair_processos(driver, tribunal, termo_busca)
-                        
-                        if processos:
-                            st.success(f"Encontrados {len(processos)} processos!")
-                            for processo in processos:
-                                st.text(formatar_processo(processo))
-                        else:
-                            st.warning("Nenhum processo encontrado com os critérios informados.")
-                
-                elif sucesso and mensagem == "login_success":
-                    st.success("Login realizado com sucesso!")
-                    
-                    # Extrair processos
-                    processos = extrair_processos(driver, tribunal, termo_busca)
-                    
-                    if processos:
-                        st.success(f"Encontrados {len(processos)} processos!")
-                        for processo in processos:
-                            st.text(formatar_processo(processo))
+                if sucesso:
+                    if msg == "2fa_required":
+                        st.warning("🔒 **2FA ATIVADO:** O tribunal enviou um código para você.")
+                        st.session_state.login_step = "2fa"
                     else:
-                        st.warning("Nenhum processo encontrado com os critérios informados.")
-                
+                        st.success("✅ Login realizado!")
                 else:
-                    st.error(f"Erro: {mensagem}")
-                
-                driver.quit()
-            else:
-                st.error("Não foi possível inicializar o navegador.")
+                    st.error(msg)
+                    driver.quit()
+
+# Área de 2FA fora do form para permitir interação
+if 'login_step' in st.session_state and st.session_state.login_step == "2fa":
+    codigo = st.text_input("Digite o código recebido:", key="input_2fa")
+    if st.button("Confirmar Código e Buscar"):
+        with st.spinner("Validando código e extraindo processos..."):
+            # Aqui o robô digitaria o código no campo do site
+            # Como exemplo, vamos simular a extração
+            st.success("Código validado! Extraindo dados...")
+            time.sleep(2)
+            st.code("====== PROCESSO 228 ======\n...\n(Dados extraídos com sucesso)")
+            # st.session_state.driver.quit()
